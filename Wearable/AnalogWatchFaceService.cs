@@ -14,6 +14,7 @@
 //    limitations under the License.
 
 using System;
+using System.Linq;
 using Android.Support.Wearable.Watchface;
 using Android.Views;
 using Android.OS;
@@ -26,6 +27,10 @@ using Java.Util.Concurrent;
 using System.Threading;
 using Android.Content;
 using Android.Service.Wallpaper;
+using Android.Provider;
+using System.Collections.Generic;
+using Android.Support.Wearable.Provider;
+using Android.Database;
 
 namespace Google.XamarinSamples.WatchFace
 {
@@ -37,7 +42,8 @@ namespace Google.XamarinSamples.WatchFace
 	[Service (Label="Xamarin Analog Watchface", Permission="android.permission.BIND_WALLPAPER")]
 	[MetaData ("android.service.wallpaper", Resource="@xml/watch_face")]
 	[MetaData ("com.google.android.wearable.watchface.preview", Resource="@drawable/preview_analog")]
-	[IntentFilter (new [] { "android.service.wallpaper.WallpaperService" }, Categories=new [] { "com.google.android.wearable.watchface.category.WATCH_FACE" })]
+	[IntentFilter (new [] { "android.service.wallpaper.WallpaperService" }, 
+	Categories=new [] { "com.google.android.wearable.watchface.category.WATCH_FACE" })]
 	public class AnalogWatchFaceService : CanvasWatchFaceService
 	{
 		const string Tag = "AnalogWatchFaceService";
@@ -63,8 +69,14 @@ namespace Google.XamarinSamples.WatchFace
 			Paint minutePaint;
 			Paint secondPaint;
 			Paint tickPaint;
+			Paint eventPaint;
 			bool mute;
 			Time time;
+
+			Event NextEvent {
+				get;
+				set;
+			}
 
 			Timer timerSeconds;
 			TimeZoneReceiver timeZoneReceiver;
@@ -92,6 +104,9 @@ namespace Google.XamarinSamples.WatchFace
 				);
 				base.OnCreate (surfaceHolder);
 
+				var events = QueryEvents(owner.ApplicationContext.ContentResolver);
+				NextEvent = events.FirstOrDefault();
+
 				var backgroundDrawable = owner.Resources.GetDrawable (Resource.Drawable.XamarinWatchFaceBackground);
 				backgroundBitmap = (backgroundDrawable as BitmapDrawable).Bitmap;
 
@@ -117,6 +132,13 @@ namespace Google.XamarinSamples.WatchFace
 				tickPaint.SetARGB (100, 200, 200, 200);
 				tickPaint.StrokeWidth = 2.0f;
 				tickPaint.AntiAlias = true;
+
+				eventPaint = new Paint {
+					TextSize = 18,
+					Color = Color.Blue,
+				};
+				eventPaint.AntiAlias = true;
+				eventPaint.SetStyle(Paint.Style.Fill);
 
 				time = new Time ();
 			}
@@ -151,6 +173,7 @@ namespace Google.XamarinSamples.WatchFace
 					minutePaint.AntiAlias = antiAlias;
 					secondPaint.AntiAlias = antiAlias;
 					tickPaint.AntiAlias = antiAlias;
+					eventPaint.AntiAlias = antiAlias;
 				}
 				Invalidate ();
 
@@ -167,6 +190,7 @@ namespace Google.XamarinSamples.WatchFace
 					hourPaint.Alpha = inMuteMode ? 100 : 255;
 					minutePaint.Alpha = inMuteMode ? 100 : 255;
 					secondPaint.Alpha = inMuteMode ? 80 : 255;
+					eventPaint.Alpha = inMuteMode ? 100 : 255;
 					Invalidate ();
 				}
 			}
@@ -225,6 +249,10 @@ namespace Google.XamarinSamples.WatchFace
 				float hrX = (float)Math.Sin (hrRot) * hrLength;
 				float hrY = (float)-Math.Cos (hrRot) * hrLength;
 				canvas.DrawLine (centerX, centerY, centerX + hrX, centerY + hrY, hourPaint);
+
+				// next event
+				var next = NextEvent?.Name ?? "no next event";
+				canvas.DrawText(next, centerX, centerY, eventPaint);
 			}
 
 			public override void OnVisibilityChanged (bool visible)
@@ -302,6 +330,68 @@ namespace Google.XamarinSamples.WatchFace
 				return IsVisible && !IsInAmbientMode;
 			}
 
+
+
+
+			private static readonly string[] PROJECTION = {
+			        CalendarContract.Calendars.InterfaceConsts.Id, // 0
+			        CalendarContract.Events.InterfaceConsts.Dtstart, // 1
+			        CalendarContract.Events.InterfaceConsts.Dtend, // 2
+			        CalendarContract.Events.InterfaceConsts.DisplayColor, // 3
+					//CalendarContract.Events.InterfaceConsts.Description, // 4
+			};
+
+
+			protected class Event 
+			{
+				long Start { get; set; }
+				long End { get; set; }
+				int Color { get; set; }
+				public string Name {
+					get { 
+						return "Event " + Start;
+					}
+				}
+
+				public Event(){}
+				public Event (long start, long end, int color):this()
+				{
+					this.Start = start;
+					this.End = end;
+					this.Color = color;
+				}
+			}
+
+			//TODO: async
+			protected List<Event> QueryEvents(ContentResolver contentResolver) {
+			    List<Event> events = new List<Event>();
+
+				long begin = Java.Lang.JavaSystem.CurrentTimeMillis(); //DateTime.Now.Ticks ?
+
+			    var builder = WearableCalendarContract.Instances.ContentUri.BuildUpon();
+			    ContentUris.AppendId(builder, begin);
+			    ContentUris.AppendId(builder, begin + DateUtils.DayInMillis);
+
+				Android.Net.Uri instURI = builder.Build();
+				//TODO: async
+				ICursor cursor = contentResolver.Query(instURI,
+			                    PROJECTION,
+			                    null, // selection (all)
+			                    null, // selection args
+			                    null); // order
+
+			    while (cursor.MoveToNext()) {
+			    	long start = cursor.GetLong(1);
+			        long end = cursor.GetLong(2);
+			        int color = cursor.GetInt(3);
+			        //string desc = cursor.GetString(4);
+			        events.Add(new Event(start, end, color));
+			    }
+
+			    cursor.Close();
+
+			    return events;
+			}
 		}
 
 		public class TimeZoneReceiver: BroadcastReceiver
